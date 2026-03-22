@@ -1,12 +1,12 @@
-import { APITester } from "./APITester";
 import { useEffect, useState } from "react";
 import "./index.css";
+import { VehicleSimulation } from "./VehicleSimulation";
 
-import logo from "./logo.svg";
-import reactLogo from "./react.svg";
+type Tab = "calculator" | "simulation";
 
 // src/App.tsx
 export function App() {
+  const [activeTab, setActiveTab] = useState<Tab>("calculator");
   const [display, setDisplay] = useState("0");
   const [previous, setPrevious] = useState<string | null>(null);
   const [operation, setOperation] = useState<string | null>(null);
@@ -146,97 +146,136 @@ export function App() {
     return () => window.removeEventListener("keydown", handleKeyPress);
   }, [operation, previous, display, waitingForNewValue]);
 
+  const tabs: { id: Tab; label: string }[] = [
+    { id: "calculator", label: "🧮 Calculator" },
+    { id: "simulation", label: "🚗 Traffic Sim" },
+  ];
+
   return (
     <div
       style={{
         minHeight: "100vh",
         display: "flex",
+        flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
         color: "#F9FAFB",
         fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+        background: "#0f172a",
       }}
     >
-      <div
-        style={{
-          width: "320px",
-          padding: "1.5rem",
-          borderRadius: "1rem",
-          background: "#020617",
-          boxShadow: "0 25px 50px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.1)",
-          border: "1px solid #1f2937",
-        }}
-      >
-        <h1 style={{ marginBottom: "1.5rem", fontSize: "1.5rem", fontWeight: "600" }}>
-          Calculator
-        </h1>
-        <div
-          style={{
-            borderRadius: "0.5rem",
-            padding: "1rem",
-            background: "#0f172a",
-            border: "2px solid #1f2937",
-            textAlign: "right",
-            fontSize: "2rem",
-            fontWeight: "500",
-            minHeight: "3rem",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "flex-end",
-            wordWrap: "break-word",
-            overflow: "hidden",
-            marginBottom: "1rem",
-            color: display === "Error" ? "#ef4444" : "#F9FAFB",
-          }}
-        >
-          {display}
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: "0.5rem", padding: "1.25rem 1rem 0", borderBottom: "1px solid #1e293b", width: "100%", justifyContent: "center" }}>
+        {tabs.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setActiveTab(t.id)}
+            style={{
+              padding: "0.5rem 1.4rem",
+              borderRadius: "8px 8px 0 0",
+              border: "none",
+              background: activeTab === t.id ? "#1e293b" : "transparent",
+              color: activeTab === t.id ? "#f8fafc" : "#64748b",
+              fontWeight: activeTab === t.id ? 600 : 400,
+              fontSize: "0.95rem",
+              cursor: "pointer",
+              borderBottom: activeTab === t.id ? "2px solid #3b82f6" : "2px solid transparent",
+              transition: "all 0.15s ease",
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Content */}
+      {activeTab === "simulation" ? (
+        <div style={{ width: "100%", maxWidth: "940px", padding: "1rem" }}>
+          <VehicleSimulation />
         </div>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-            gap: "0.5rem",
-          }}
-        >
-          {buttons.map((label) => (
-            <button
-              key={label}
-              className="calculator-button"
-              onClick={() => handleButtonClick(label)}
+      ) : (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: 1, padding: "2rem 1rem" }}>
+          <div
+            style={{
+              width: "320px",
+              padding: "1.5rem",
+              borderRadius: "1rem",
+              background: "#020617",
+              boxShadow: "0 25px 50px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.1)",
+              border: "1px solid #1f2937",
+            }}
+          >
+            <h1 style={{ marginBottom: "1.5rem", fontSize: "1.5rem", fontWeight: "600" }}>
+              Calculator
+            </h1>
+            <div
               style={{
-                backgroundColor:
-                  label === "=" ? "#3b82f6" :
-                  label === "C" ? "#ef4444" :
-                  ["+", "-", "*", "/"].includes(label) ? "#8b5cf6" :
-                  "#1f2937",
-                fontWeight: label === "=" || label === "C" ? "600" : "500",
-                transition: "all 0.15s ease",
-              }}
-              onMouseEnter={(e) => {
-                (e.target as HTMLButtonElement).style.transform = "scale(1.05)";
-                (e.target as HTMLButtonElement).style.background =
-                  label === "=" ? "#2563eb" :
-                  label === "C" ? "#dc2626" :
-                  ["+", "-", "*", "/"].includes(label) ? "#7c3aed" :
-                  "#374151";
-              }}
-              onMouseLeave={(e) => {
-                (e.target as HTMLButtonElement).style.transform = "scale(1)";
-                (e.target as HTMLButtonElement).style.background =
-                  label === "=" ? "#3b82f6" :
-                  label === "C" ? "#ef4444" :
-                  ["+", "-", "*", "/"].includes(label) ? "#8b5cf6" :
-                  "#1f2937";
+                borderRadius: "0.5rem",
+                padding: "1rem",
+                background: "#0f172a",
+                border: "2px solid #1f2937",
+                textAlign: "right",
+                fontSize: "2rem",
+                fontWeight: "500",
+                minHeight: "3rem",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-end",
+                wordWrap: "break-word",
+                overflow: "hidden",
+                marginBottom: "1rem",
+                color: display === "Error" ? "#ef4444" : "#F9FAFB",
               }}
             >
-              {label}
-            </button>
-          ))}
+              {display}
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                gap: "0.5rem",
+              }}
+            >
+              {buttons.map((label) => (
+                <button
+                  key={label}
+                  className="calculator-button"
+                  onClick={() => handleButtonClick(label)}
+                  style={{
+                    backgroundColor:
+                      label === "=" ? "#3b82f6" :
+                      label === "C" ? "#ef4444" :
+                      ["+", "-", "*", "/"].includes(label) ? "#8b5cf6" :
+                      "#1f2937",
+                    fontWeight: label === "=" || label === "C" ? "600" : "500",
+                    transition: "all 0.15s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.target as HTMLButtonElement).style.transform = "scale(1.05)";
+                    (e.target as HTMLButtonElement).style.background =
+                      label === "=" ? "#2563eb" :
+                      label === "C" ? "#dc2626" :
+                      ["+", "-", "*", "/"].includes(label) ? "#7c3aed" :
+                      "#374151";
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.target as HTMLButtonElement).style.transform = "scale(1)";
+                    (e.target as HTMLButtonElement).style.background =
+                      label === "=" ? "#3b82f6" :
+                      label === "C" ? "#ef4444" :
+                      ["+", "-", "*", "/"].includes(label) ? "#8b5cf6" :
+                      "#1f2937";
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p style={{ fontSize: "0.75rem", color: "#6b7280", marginTop: "1rem", textAlign: "center" }}>
+              Use keyboard: numbers, +−*/=, Backspace, Escape to clear
+            </p>
+          </div>
         </div>
-        <p style={{ fontSize: "0.75rem", color: "#6b7280", marginTop: "1rem", textAlign: "center" }}>
-          Use keyboard: numbers, +−*/=, Backspace, Escape to clear
-        </p>
-      </div>
+      )}
     </div>
   );
 }
