@@ -1,317 +1,15 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
   type VehicleType, type Vehicle, type VVehicle,
-  CANVAS_H, ROAD_TOP, ROAD_BOT, CENTER_Y, LANES,
-  VROAD_CENTER_X, VROAD_LEFT, VROAD_RIGHT, VLANE_SOUTH_X, VLANE_NORTH_X,
-  DEFS, PHASE_DURATIONS,
-  hSignal, vSignal,
+  CANVAS_H, LANES, DEFS, PHASE_DURATIONS,
   spawnVehicle, spawnVVehicle, vDir, vLaneX,
   tickVehicles, tickVVehicles,
 } from "./simulation";
+import { drawRoad } from "./draw/road";
+import { drawTrafficLights } from "./draw/trafficLights";
+import { drawTruck, drawCar, drawMotorcycle } from "./draw/vehicles";
 
-// ─── Drawing helpers ──────────────────────────────────────────────────────────
-function hexToRgb(hex: string) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return { r, g, b };
-}
-
-function darken(hex: string, amount: number) {
-  const { r, g, b } = hexToRgb(hex);
-  const d = (v: number) => Math.max(0, Math.round(v * (1 - amount)));
-  return `rgb(${d(r)},${d(g)},${d(b)})`;
-}
-
-function lighten(hex: string, amount: number) {
-  const { r, g, b } = hexToRgb(hex);
-  const l = (v: number) => Math.min(255, Math.round(v + (255 - v) * amount));
-  return `rgb(${l(r)},${l(g)},${l(b)})`;
-}
-
-// All draw functions assume ctx is already translated to vehicle center
-// and scaled -1 for left-going vehicles (so they always face right in local space).
-
-function drawTruck(ctx: CanvasRenderingContext2D, color: string) {
-  const W = 80, H = 28;
-  const hw = W / 2, hh = H / 2;
-
-  // Trailer body
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.roundRect(-hw, -hh, W * 0.62, H, 3);
-  ctx.fill();
-
-  // Trailer stripe
-  ctx.fillStyle = darken(color, 0.25);
-  ctx.fillRect(-hw + 4, -hh + 5, W * 0.58, 3);
-  ctx.fillRect(-hw + 4, hh - 8, W * 0.58, 3);
-
-  // Cab
-  const cabX = -hw + W * 0.62;
-  ctx.fillStyle = darken(color, 0.15);
-  ctx.beginPath();
-  ctx.roundRect(cabX, -hh, W * 0.38, H, [0, 4, 4, 0]);
-  ctx.fill();
-
-  // Windshield
-  ctx.fillStyle = "rgba(168,216,234,0.75)";
-  ctx.beginPath();
-  ctx.roundRect(cabX + W * 0.08, -hh + 4, W * 0.24, H - 10, 2);
-  ctx.fill();
-
-  // Exhaust stack
-  ctx.fillStyle = "#555";
-  ctx.fillRect(cabX + W * 0.01, -hh - 5, 4, 7);
-
-  // Wheels (4 small rects)
-  ctx.fillStyle = "#1a1a1a";
-  const wheelW = 9, wheelH = 6;
-  ([[-hw + 6, -hh - 2], [-hw + 6, hh - 4], [-hw + W * 0.4, -hh - 2], [-hw + W * 0.4, hh - 4]] as [number, number][]).forEach(([wx, wy]) => {
-    ctx.fillRect(wx, wy, wheelW, wheelH);
-  });
-}
-
-function drawCar(ctx: CanvasRenderingContext2D, color: string) {
-  const W = 44, H = 20;
-  const hw = W / 2, hh = H / 2;
-
-  // Body
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.roundRect(-hw, -hh, W, H, 5);
-  ctx.fill();
-
-  // Roof (narrower)
-  ctx.fillStyle = darken(color, 0.2);
-  ctx.beginPath();
-  ctx.roundRect(-hw + 8, -hh - 4, W - 16, H * 0.6, 4);
-  ctx.fill();
-
-  // Front windshield
-  ctx.fillStyle = "rgba(168,216,234,0.8)";
-  ctx.beginPath();
-  ctx.roundRect(-hw + 9, -hh - 3, (W - 18) * 0.48, H * 0.52, 2);
-  ctx.fill();
-
-  // Rear windshield
-  ctx.fillStyle = "rgba(168,216,234,0.65)";
-  ctx.beginPath();
-  ctx.roundRect(-hw + 9 + (W - 18) * 0.52, -hh - 3, (W - 18) * 0.48, H * 0.52, 2);
-  ctx.fill();
-
-  // Headlights
-  ctx.fillStyle = "#fffde7";
-  ctx.fillRect(hw - 5, -5, 3, 3);
-  ctx.fillRect(hw - 5,  2, 3, 3);
-
-  // Taillights
-  ctx.fillStyle = "#e74c3c";
-  ctx.fillRect(-hw + 2, -5, 3, 3);
-  ctx.fillRect(-hw + 2,  2, 3, 3);
-
-  // Wheels
-  ctx.fillStyle = "#1a1a1a";
-  ctx.fillRect(-hw + 3, -hh - 2, 8, 4);
-  ctx.fillRect(-hw + 3,  hh - 2, 8, 4);
-  ctx.fillRect( hw - 11, -hh - 2, 8, 4);
-  ctx.fillRect( hw - 11,  hh - 2, 8, 4);
-}
-
-function drawMotorcycle(ctx: CanvasRenderingContext2D, color: string, wheelAngle: number) {
-  const W = 32, H = 13;
-  const hw = W / 2, hh = H / 2;
-
-  // Body — elongated teardrop
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, hw, hh * 0.7, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Tank/fairing highlight
-  ctx.fillStyle = lighten(color, 0.3);
-  ctx.beginPath();
-  ctx.ellipse(hw * 0.1, 0, hw * 0.35, hh * 0.4, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Rider (helmet viewed from above)
-  ctx.fillStyle = darken(color, 0.3);
-  ctx.beginPath();
-  ctx.ellipse(-hw * 0.1, 0, 5, 4, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Wheels — spinning
-  ctx.strokeStyle = "#1a1a1a";
-  ctx.lineWidth = 3;
-  const drawWheel = (cx: number) => {
-    ctx.beginPath();
-    ctx.arc(cx, 0, 5, 0, Math.PI * 2);
-    ctx.stroke();
-    // spoke
-    ctx.beginPath();
-    ctx.moveTo(cx + Math.cos(wheelAngle) * 4, Math.sin(wheelAngle) * 4);
-    ctx.lineTo(cx - Math.cos(wheelAngle) * 4, -Math.sin(wheelAngle) * 4);
-    ctx.stroke();
-  };
-  drawWheel(-hw + 4);
-  drawWheel(hw - 4);
-}
-
-
-// ─── Road drawing ─────────────────────────────────────────────────────────────
-function drawRoad(ctx: CanvasRenderingContext2D, cw: number, dashOffset: number) {
-  // Grass top-left
-  ctx.fillStyle = "#2d5a1b";
-  ctx.fillRect(0, 0, VROAD_LEFT, ROAD_TOP);
-  // Grass top-right
-  ctx.fillRect(VROAD_RIGHT, 0, cw - VROAD_RIGHT, ROAD_TOP);
-  // Grass bottom-left
-  ctx.fillRect(0, ROAD_BOT, VROAD_LEFT, CANVAS_H - ROAD_BOT);
-  // Grass bottom-right
-  ctx.fillRect(VROAD_RIGHT, ROAD_BOT, cw - VROAD_RIGHT, CANVAS_H - ROAD_BOT);
-
-  // Horizontal road surface (left of vertical road)
-  ctx.fillStyle = "#3a3a3a";
-  ctx.fillRect(0, ROAD_TOP, VROAD_LEFT, ROAD_BOT - ROAD_TOP);
-  // Horizontal road surface (right of vertical road)
-  ctx.fillRect(VROAD_RIGHT, ROAD_TOP, cw - VROAD_RIGHT, ROAD_BOT - ROAD_TOP);
-
-  // Vertical road surface (full canvas height)
-  ctx.fillRect(VROAD_LEFT, 0, VROAD_RIGHT - VROAD_LEFT, CANVAS_H);
-
-  // Intersection box (slightly lighter to hint at pavement wear)
-  ctx.fillStyle = "#424242";
-  ctx.fillRect(VROAD_LEFT, ROAD_TOP, VROAD_RIGHT - VROAD_LEFT, ROAD_BOT - ROAD_TOP);
-
-  // ── Horizontal road markings ──────────────────────────────────────────────
-
-  // Road edges (white) — skip over vertical road
-  ctx.strokeStyle = "#e0e0e0";
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(0, ROAD_TOP + 1);       ctx.lineTo(VROAD_LEFT, ROAD_TOP + 1);
-  ctx.moveTo(VROAD_RIGHT, ROAD_TOP + 1); ctx.lineTo(cw, ROAD_TOP + 1);
-  ctx.moveTo(0, ROAD_BOT - 1);       ctx.lineTo(VROAD_LEFT, ROAD_BOT - 1);
-  ctx.moveTo(VROAD_RIGHT, ROAD_BOT - 1); ctx.lineTo(cw, ROAD_BOT - 1);
-  ctx.stroke();
-
-  // Center divider — double yellow (skip intersection)
-  ctx.strokeStyle = "#f0c040";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(0, CENTER_Y - 3);       ctx.lineTo(VROAD_LEFT, CENTER_Y - 3);
-  ctx.moveTo(VROAD_RIGHT, CENTER_Y - 3); ctx.lineTo(cw, CENTER_Y - 3);
-  ctx.moveTo(0, CENTER_Y + 3);       ctx.lineTo(VROAD_LEFT, CENTER_Y + 3);
-  ctx.moveTo(VROAD_RIGHT, CENTER_Y + 3); ctx.lineTo(cw, CENTER_Y + 3);
-  ctx.stroke();
-
-  // Dashed lane lines — horizontal (skip intersection zone)
-  ctx.strokeStyle = "#aaaaaa";
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([28, 20]);
-  ctx.lineDashOffset = -dashOffset;
-  const laneLineYs = [LANES[0]!.y + 30, LANES[2]!.y + 32, LANES[3]!.y + 32];
-  laneLineYs.forEach(y => {
-    ctx.beginPath();
-    ctx.moveTo(0, y); ctx.lineTo(VROAD_LEFT, y);
-    ctx.moveTo(VROAD_RIGHT, y); ctx.lineTo(cw, y);
-    ctx.stroke();
-  });
-  ctx.setLineDash([]);
-
-  // ── Vertical road markings ────────────────────────────────────────────────
-
-  // Vertical road edges (white) — skip over horizontal road
-  ctx.strokeStyle = "#e0e0e0";
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(VROAD_LEFT + 1, 0);       ctx.lineTo(VROAD_LEFT + 1, ROAD_TOP);
-  ctx.moveTo(VROAD_LEFT + 1, ROAD_BOT); ctx.lineTo(VROAD_LEFT + 1, CANVAS_H);
-  ctx.moveTo(VROAD_RIGHT - 1, 0);       ctx.lineTo(VROAD_RIGHT - 1, ROAD_TOP);
-  ctx.moveTo(VROAD_RIGHT - 1, ROAD_BOT); ctx.lineTo(VROAD_RIGHT - 1, CANVAS_H);
-  ctx.stroke();
-
-  // Vertical center divider — double yellow (skip intersection)
-  ctx.strokeStyle = "#f0c040";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(VROAD_CENTER_X - 3, 0);       ctx.lineTo(VROAD_CENTER_X - 3, ROAD_TOP);
-  ctx.moveTo(VROAD_CENTER_X - 3, ROAD_BOT); ctx.lineTo(VROAD_CENTER_X - 3, CANVAS_H);
-  ctx.moveTo(VROAD_CENTER_X + 3, 0);       ctx.lineTo(VROAD_CENTER_X + 3, ROAD_TOP);
-  ctx.moveTo(VROAD_CENTER_X + 3, ROAD_BOT); ctx.lineTo(VROAD_CENTER_X + 3, CANVAS_H);
-  ctx.stroke();
-}
-
-// ─── Traffic light drawing ────────────────────────────────────────────────────
-function drawOneLamp(
-  ctx: CanvasRenderingContext2D,
-  cx: number, cy: number,
-  signal: "green" | "yellow" | "red",
-) {
-  const dotR = 5;
-  const gap  = 13;
-  const hw = dotR + 4, hh = gap + dotR + 4;
-
-  // Housing
-  ctx.fillStyle = "#111";
-  ctx.beginPath();
-  ctx.roundRect(cx - hw, cy - hh, hw * 2, hh * 2, 3);
-  ctx.fill();
-  ctx.strokeStyle = "#444";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  const litColors = ["#e74c3c", "#f39c12", "#2ecc71"];
-  const dimColors = ["#4a1a1a", "#3a2d10", "#1a3a1a"];
-  const activeIdx = signal === "red" ? 0 : signal === "yellow" ? 1 : 2;
-
-  for (let i = 0; i < 3; i++) {
-    const dotY = cy - gap + i * gap;
-    ctx.beginPath();
-    ctx.arc(cx, dotY, dotR, 0, Math.PI * 2);
-    ctx.fillStyle = i === activeIdx ? litColors[i]! : dimColors[i]!;
-    ctx.fill();
-    if (i === activeIdx) {
-      ctx.shadowColor = litColors[i]!;
-      ctx.shadowBlur = 10;
-      ctx.beginPath();
-      ctx.arc(cx, dotY, dotR, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-      ctx.shadowColor = "transparent";
-    }
-  }
-}
-
-function drawTrafficLights(ctx: CanvasRenderingContext2D, phase: number) {
-  const hs = hSignal(phase);
-  const vs = vSignal(phase);
-
-  // ── Stop lines ──────────────────────────────────────────────────────────────
-  ctx.strokeStyle = "#ffffff";
-  ctx.lineWidth = 2.5;
-  ctx.beginPath();
-  // Eastbound  (right-going, lanes 2-4 — below CENTER_Y)
-  ctx.moveTo(VROAD_LEFT,  CENTER_Y + 4); ctx.lineTo(VROAD_LEFT,  ROAD_BOT  - 3);
-  // Westbound  (left-going,  lanes 0-1 — above CENTER_Y)
-  ctx.moveTo(VROAD_RIGHT, ROAD_TOP  + 3); ctx.lineTo(VROAD_RIGHT, CENTER_Y  - 4);
-  // Southbound (left half of vertical road)
-  ctx.moveTo(VROAD_LEFT  + 3, ROAD_TOP); ctx.lineTo(VROAD_CENTER_X - 3, ROAD_TOP);
-  // Northbound (right half of vertical road)
-  ctx.moveTo(VROAD_CENTER_X + 3, ROAD_BOT); ctx.lineTo(VROAD_RIGHT - 3, ROAD_BOT);
-  ctx.stroke();
-
-  // ── Lamp fixtures ────────────────────────────────────────────────────────────
-  // Eastbound lamp: left of intersection, in right-lane area
-  drawOneLamp(ctx, VROAD_LEFT - 14, Math.round((CENTER_Y + ROAD_BOT) / 2), hs);
-  // Westbound lamp: right of intersection, in left-lane area
-  drawOneLamp(ctx, VROAD_RIGHT + 14, Math.round((ROAD_TOP + CENTER_Y) / 2), hs);
-  // Southbound lamp: above intersection, in southbound lane (left half of V road)
-  drawOneLamp(ctx, VLANE_SOUTH_X, ROAD_TOP - 18, vs);
-  // Northbound lamp: below intersection, in northbound lane (right half of V road)
-  drawOneLamp(ctx, VLANE_NORTH_X, ROAD_BOT + 18, vs);
-}
-
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 function getVehicleY(v: Vehicle): number {
   if (!v.laneChanging) return LANES[v.lane]!.y + v.wobble;
   const t = v.laneChangeProg;
@@ -319,13 +17,13 @@ function getVehicleY(v: Vehicle): number {
   return v.fromY + (v.toY - v.fromY) * ease + v.wobble;
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
 const TYPE_LABELS: { type: VehicleType; emoji: string; color: string }[] = [
   { type: "truck",      emoji: "🚚", color: "#e67e22" },
   { type: "car",        emoji: "🚗", color: "#3498db" },
   { type: "motorcycle", emoji: "🏍️", color: "#c0392b" },
 ];
 
+// ─── Component ────────────────────────────────────────────────────────────────
 export function VehicleSimulation() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const vehiclesRef = useRef<Vehicle[]>([]);
@@ -350,7 +48,6 @@ export function VehicleSimulation() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const cw = canvas.width;
-    // Pick the lane for this vehicle type that has the fewest vehicles
     const preferredLanes = type === "motorcycle"
       ? [0, 3, 4, 1, 2]
       : type === "truck"
@@ -387,14 +84,12 @@ export function VehicleSimulation() {
       ["truck", 1],
       ["motorcycle", 4],
     ];
-    // Spread vehicles across lanes at random positions
     initialSpawns.forEach(([type, lane]) => {
       const v = spawnVehicle(type, lane, cw);
       v.x = Math.random() * cw;
       vehiclesRef.current.push(v);
     });
 
-    // Seed vertical vehicles spread across the canvas height
     const vInitialSpawns: [VehicleType, 0 | 1][] = [
       ["car", 0], ["car", 1],
       ["truck", 0],
@@ -475,7 +170,6 @@ export function VehicleSimulation() {
         drawList.push({ sortY: v.y, draw: () => {
           ctx.save();
           ctx.translate(lx, v.y);
-          // Rotate so the existing right-facing draw functions point in the travel direction
           ctx.rotate(dir === 1 ? Math.PI / 2 : -Math.PI / 2);
           ctx.shadowColor = "rgba(0,0,0,0.5)";
           ctx.shadowBlur = 6;
