@@ -1,110 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-
-type VehicleType = "truck" | "car" | "motorcycle" | "bicycle";
-type Direction = 1 | -1;
-
-// ─── Lane layout ──────────────────────────────────────────────────────────────
-const CANVAS_H = 380;
-const ROAD_TOP = 48;
-const ROAD_BOT = 332;
-const CENTER_Y = (ROAD_TOP + ROAD_BOT) / 2; // 190
-
-const LANES: { y: number; dir: Direction }[] = [
-  { y: 93,  dir: -1 }, // 0 — left fast
-  { y: 157, dir: -1 }, // 1 — left slow
-  { y: 225, dir:  1 }, // 2 — right slow
-  { y: 290, dir:  1 }, // 3 — right fast
-];
-
-// ─── Vehicle specs ────────────────────────────────────────────────────────────
-interface VehicleDef {
-  w: number; h: number;
-  minSpeed: number; maxSpeed: number;
-  accel: number; decel: number;
-  gap: number; // minimum safe gap in px
-  colors: string[];
-  label: string;
-}
-
-const DEFS: Record<VehicleType, VehicleDef> = {
-  truck: {
-    w: 80, h: 28,
-    minSpeed: 0.7, maxSpeed: 1.6,
-    accel: 0.008, decel: 0.014,
-    gap: 130,
-    colors: ["#e67e22", "#d35400", "#95a5a6", "#7f8c8d", "#c0392b"],
-    label: "Truck",
-  },
-  car: {
-    w: 44, h: 20,
-    minSpeed: 1.2, maxSpeed: 3.4,
-    accel: 0.045, decel: 0.07,
-    gap: 65,
-    colors: ["#3498db", "#2ecc71", "#e74c3c", "#9b59b6", "#f1c40f", "#1abc9c", "#e91e63"],
-    label: "Car",
-  },
-  motorcycle: {
-    w: 32, h: 13,
-    minSpeed: 2.0, maxSpeed: 5.0,
-    accel: 0.09, decel: 0.14,
-    gap: 48,
-    colors: ["#2c3e50", "#c0392b", "#16a085", "#f39c12"],
-    label: "Motorcycle",
-  },
-  bicycle: {
-    w: 28, h: 11,
-    minSpeed: 0.25, maxSpeed: 1.0,
-    accel: 0.012, decel: 0.02,
-    gap: 38,
-    colors: ["#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6"],
-    label: "Bicycle",
-  },
-};
-
-// ─── Vehicle state ─────────────────────────────────────────────────────────────
-interface Vehicle {
-  id: number;
-  type: VehicleType;
-  x: number;
-  lane: number;
-  speed: number;       // current speed (px/frame, always ≥ 0)
-  targetSpeed: number;
-  color: string;
-  wheelAngle: number;  // radians, for spinning wheels
-  wobble: number;      // current y-offset (bicycle sway)
-  wobblePhase: number;
-  speedTimer: number;  // frames until next random speed change
-  // smooth lane change
-  laneChanging: boolean;
-  fromY: number;
-  toY: number;
-  laneChangeProg: number; // 0–1
-}
-
-let _nextId = 1;
-
-function randomSpeed(def: VehicleDef) {
-  return def.minSpeed + Math.random() * (def.maxSpeed - def.minSpeed);
-}
-
-function spawnVehicle(type: VehicleType, laneIdx: number, cw: number): Vehicle {
-  const def = DEFS[type];
-  const lane = LANES[laneIdx]!;
-  const x = lane.dir === 1 ? -def.w / 2 - 20 : cw + def.w / 2 + 20;
-  const speed = randomSpeed(def);
-  return {
-    id: _nextId++,
-    type, lane: laneIdx, x, speed,
-    targetSpeed: speed,
-    color: def.colors[Math.floor(Math.random() * def.colors.length)]!,
-    wheelAngle: 0,
-    wobble: 0,
-    wobblePhase: Math.random() * Math.PI * 2,
-    speedTimer: 180 + Math.floor(Math.random() * 240),
-    laneChanging: false,
-    fromY: lane.y, toY: lane.y, laneChangeProg: 1,
-  };
-}
+import {
+  type VehicleType, type Vehicle, type VVehicle,
+  CANVAS_H, ROAD_TOP, ROAD_BOT, CENTER_Y, LANES,
+  VROAD_CENTER_X, VROAD_LEFT, VROAD_RIGHT, VLANE_SOUTH_X, VLANE_NORTH_X,
+  DEFS, PHASE_DURATIONS,
+  hSignal, vSignal,
+  spawnVehicle, spawnVVehicle, vDir, vLaneX,
+  tickVehicles, tickVVehicles,
+} from "./simulation";
 
 // ─── Drawing helpers ──────────────────────────────────────────────────────────
 function hexToRgb(hex: string) {
@@ -254,153 +157,159 @@ function drawMotorcycle(ctx: CanvasRenderingContext2D, color: string, wheelAngle
   drawWheel(hw - 4);
 }
 
-function drawBicycle(ctx: CanvasRenderingContext2D, color: string, wheelAngle: number) {
-  const hw = 14;
-
-  // Frame
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(-hw + 3, 0);
-  ctx.lineTo(0, -2);
-  ctx.lineTo(hw - 3, 0);
-  ctx.lineTo(0, 2);
-  ctx.closePath();
-  ctx.stroke();
-
-  // Rider
-  ctx.fillStyle = darken(color, 0.2);
-  ctx.beginPath();
-  ctx.ellipse(0, 0, 5, 3.5, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Wheels — spinning
-  ctx.strokeStyle = "#1a1a1a";
-  ctx.lineWidth = 2;
-  const drawWheel = (cx: number) => {
-    ctx.beginPath();
-    ctx.arc(cx, 0, 5, 0, Math.PI * 2);
-    ctx.stroke();
-    // spoke
-    ctx.beginPath();
-    ctx.moveTo(cx + Math.cos(wheelAngle) * 4, Math.sin(wheelAngle) * 4);
-    ctx.lineTo(cx - Math.cos(wheelAngle) * 4, -Math.sin(wheelAngle) * 4);
-    ctx.stroke();
-  };
-  drawWheel(-hw + 3);
-  drawWheel(hw - 3);
-}
 
 // ─── Road drawing ─────────────────────────────────────────────────────────────
 function drawRoad(ctx: CanvasRenderingContext2D, cw: number, dashOffset: number) {
-  // Grass top
+  // Grass top-left
   ctx.fillStyle = "#2d5a1b";
-  ctx.fillRect(0, 0, cw, ROAD_TOP);
+  ctx.fillRect(0, 0, VROAD_LEFT, ROAD_TOP);
+  // Grass top-right
+  ctx.fillRect(VROAD_RIGHT, 0, cw - VROAD_RIGHT, ROAD_TOP);
+  // Grass bottom-left
+  ctx.fillRect(0, ROAD_BOT, VROAD_LEFT, CANVAS_H - ROAD_BOT);
+  // Grass bottom-right
+  ctx.fillRect(VROAD_RIGHT, ROAD_BOT, cw - VROAD_RIGHT, CANVAS_H - ROAD_BOT);
 
-  // Road surface
+  // Horizontal road surface (left of vertical road)
   ctx.fillStyle = "#3a3a3a";
-  ctx.fillRect(0, ROAD_TOP, cw, ROAD_BOT - ROAD_TOP);
+  ctx.fillRect(0, ROAD_TOP, VROAD_LEFT, ROAD_BOT - ROAD_TOP);
+  // Horizontal road surface (right of vertical road)
+  ctx.fillRect(VROAD_RIGHT, ROAD_TOP, cw - VROAD_RIGHT, ROAD_BOT - ROAD_TOP);
 
-  // Grass bottom
-  ctx.fillStyle = "#2d5a1b";
-  ctx.fillRect(0, ROAD_BOT, cw, CANVAS_H - ROAD_BOT);
+  // Vertical road surface (full canvas height)
+  ctx.fillRect(VROAD_LEFT, 0, VROAD_RIGHT - VROAD_LEFT, CANVAS_H);
 
-  // Road edges (white)
+  // Intersection box (slightly lighter to hint at pavement wear)
+  ctx.fillStyle = "#424242";
+  ctx.fillRect(VROAD_LEFT, ROAD_TOP, VROAD_RIGHT - VROAD_LEFT, ROAD_BOT - ROAD_TOP);
+
+  // ── Horizontal road markings ──────────────────────────────────────────────
+
+  // Road edges (white) — skip over vertical road
   ctx.strokeStyle = "#e0e0e0";
   ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.moveTo(0, ROAD_TOP + 1); ctx.lineTo(cw, ROAD_TOP + 1);
-  ctx.moveTo(0, ROAD_BOT - 1); ctx.lineTo(cw, ROAD_BOT - 1);
+  ctx.moveTo(0, ROAD_TOP + 1);       ctx.lineTo(VROAD_LEFT, ROAD_TOP + 1);
+  ctx.moveTo(VROAD_RIGHT, ROAD_TOP + 1); ctx.lineTo(cw, ROAD_TOP + 1);
+  ctx.moveTo(0, ROAD_BOT - 1);       ctx.lineTo(VROAD_LEFT, ROAD_BOT - 1);
+  ctx.moveTo(VROAD_RIGHT, ROAD_BOT - 1); ctx.lineTo(cw, ROAD_BOT - 1);
   ctx.stroke();
 
-  // Center divider — double yellow
+  // Center divider — double yellow (skip intersection)
   ctx.strokeStyle = "#f0c040";
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(0, CENTER_Y - 3); ctx.lineTo(cw, CENTER_Y - 3);
-  ctx.moveTo(0, CENTER_Y + 3); ctx.lineTo(cw, CENTER_Y + 3);
+  ctx.moveTo(0, CENTER_Y - 3);       ctx.lineTo(VROAD_LEFT, CENTER_Y - 3);
+  ctx.moveTo(VROAD_RIGHT, CENTER_Y - 3); ctx.lineTo(cw, CENTER_Y - 3);
+  ctx.moveTo(0, CENTER_Y + 3);       ctx.lineTo(VROAD_LEFT, CENTER_Y + 3);
+  ctx.moveTo(VROAD_RIGHT, CENTER_Y + 3); ctx.lineTo(cw, CENTER_Y + 3);
   ctx.stroke();
 
-  // Dashed lane lines (white)
+  // Dashed lane lines — horizontal (skip intersection zone)
   ctx.strokeStyle = "#aaaaaa";
   ctx.lineWidth = 1.5;
   ctx.setLineDash([28, 20]);
   ctx.lineDashOffset = -dashOffset;
-
-  const laneLineYs = [LANES[0]!.y + 30, LANES[2]!.y + 32]; // between lane 0–1 and lane 2–3
+  const laneLineYs = [LANES[0]!.y + 30, LANES[2]!.y + 32, LANES[3]!.y + 32];
   laneLineYs.forEach(y => {
     ctx.beginPath();
-    ctx.moveTo(0, y); ctx.lineTo(cw, y);
+    ctx.moveTo(0, y); ctx.lineTo(VROAD_LEFT, y);
+    ctx.moveTo(VROAD_RIGHT, y); ctx.lineTo(cw, y);
     ctx.stroke();
   });
   ctx.setLineDash([]);
+
+  // ── Vertical road markings ────────────────────────────────────────────────
+
+  // Vertical road edges (white) — skip over horizontal road
+  ctx.strokeStyle = "#e0e0e0";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(VROAD_LEFT + 1, 0);       ctx.lineTo(VROAD_LEFT + 1, ROAD_TOP);
+  ctx.moveTo(VROAD_LEFT + 1, ROAD_BOT); ctx.lineTo(VROAD_LEFT + 1, CANVAS_H);
+  ctx.moveTo(VROAD_RIGHT - 1, 0);       ctx.lineTo(VROAD_RIGHT - 1, ROAD_TOP);
+  ctx.moveTo(VROAD_RIGHT - 1, ROAD_BOT); ctx.lineTo(VROAD_RIGHT - 1, CANVAS_H);
+  ctx.stroke();
+
+  // Vertical center divider — double yellow (skip intersection)
+  ctx.strokeStyle = "#f0c040";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(VROAD_CENTER_X - 3, 0);       ctx.lineTo(VROAD_CENTER_X - 3, ROAD_TOP);
+  ctx.moveTo(VROAD_CENTER_X - 3, ROAD_BOT); ctx.lineTo(VROAD_CENTER_X - 3, CANVAS_H);
+  ctx.moveTo(VROAD_CENTER_X + 3, 0);       ctx.lineTo(VROAD_CENTER_X + 3, ROAD_TOP);
+  ctx.moveTo(VROAD_CENTER_X + 3, ROAD_BOT); ctx.lineTo(VROAD_CENTER_X + 3, CANVAS_H);
+  ctx.stroke();
 }
 
-// ─── Physics update ───────────────────────────────────────────────────────────
-function tickVehicles(vehicles: Vehicle[], cw: number) {
-  vehicles.forEach(v => {
-    const def = DEFS[v.type];
-    const dir = LANES[v.lane]!.dir;
+// ─── Traffic light drawing ────────────────────────────────────────────────────
+function drawOneLamp(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number,
+  signal: "green" | "yellow" | "red",
+) {
+  const dotR = 5;
+  const gap  = 13;
+  const hw = dotR + 4, hh = gap + dotR + 4;
 
-    // Find the closest vehicle ahead in the same lane
-    let minGap = Infinity;
-    let aheadSpeed = Infinity;
-    vehicles.forEach(other => {
-      if (other.id === v.id) return;
-      if (other.lane !== v.lane) return;
-      const dx = (other.x - v.x) * dir; // positive = ahead
-      if (dx <= 0) return;
-      const gap = dx - def.w / 2 - DEFS[other.type].w / 2;
-      if (gap < minGap) { minGap = gap; aheadSpeed = other.speed; }
-    });
+  // Housing
+  ctx.fillStyle = "#111";
+  ctx.beginPath();
+  ctx.roundRect(cx - hw, cy - hh, hw * 2, hh * 2, 3);
+  ctx.fill();
+  ctx.strokeStyle = "#444";
+  ctx.lineWidth = 1;
+  ctx.stroke();
 
-    // Adjust target speed
-    let wantedSpeed = v.targetSpeed;
-    if (minGap < def.gap * 1.5) {
-      const fraction = Math.max(0, (minGap - def.gap * 0.4) / (def.gap * 1.1));
-      wantedSpeed = Math.min(wantedSpeed, aheadSpeed * fraction + def.minSpeed * (1 - fraction));
+  const litColors = ["#e74c3c", "#f39c12", "#2ecc71"];
+  const dimColors = ["#4a1a1a", "#3a2d10", "#1a3a1a"];
+  const activeIdx = signal === "red" ? 0 : signal === "yellow" ? 1 : 2;
+
+  for (let i = 0; i < 3; i++) {
+    const dotY = cy - gap + i * gap;
+    ctx.beginPath();
+    ctx.arc(cx, dotY, dotR, 0, Math.PI * 2);
+    ctx.fillStyle = i === activeIdx ? litColors[i]! : dimColors[i]!;
+    ctx.fill();
+    if (i === activeIdx) {
+      ctx.shadowColor = litColors[i]!;
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.arc(cx, dotY, dotR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
     }
-    if (minGap < def.gap * 0.5) {
-      wantedSpeed = Math.max(0, aheadSpeed * 0.5);
-    }
+  }
+}
 
-    // Smoothly approach wantedSpeed
-    if (v.speed < wantedSpeed) {
-      v.speed = Math.min(v.speed + def.accel, wantedSpeed);
-    } else if (v.speed > wantedSpeed) {
-      v.speed = Math.max(v.speed - def.decel, wantedSpeed);
-    }
+function drawTrafficLights(ctx: CanvasRenderingContext2D, phase: number) {
+  const hs = hSignal(phase);
+  const vs = vSignal(phase);
 
-    // Move
-    v.x += v.speed * dir;
+  // ── Stop lines ──────────────────────────────────────────────────────────────
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  // Eastbound  (right-going, lanes 2-4 — below CENTER_Y)
+  ctx.moveTo(VROAD_LEFT,  CENTER_Y + 4); ctx.lineTo(VROAD_LEFT,  ROAD_BOT  - 3);
+  // Westbound  (left-going,  lanes 0-1 — above CENTER_Y)
+  ctx.moveTo(VROAD_RIGHT, ROAD_TOP  + 3); ctx.lineTo(VROAD_RIGHT, CENTER_Y  - 4);
+  // Southbound (left half of vertical road)
+  ctx.moveTo(VROAD_LEFT  + 3, ROAD_TOP); ctx.lineTo(VROAD_CENTER_X - 3, ROAD_TOP);
+  // Northbound (right half of vertical road)
+  ctx.moveTo(VROAD_CENTER_X + 3, ROAD_BOT); ctx.lineTo(VROAD_RIGHT - 3, ROAD_BOT);
+  ctx.stroke();
 
-    // Wrap around
-    const halfW = def.w / 2 + 20;
-    if (dir === 1 && v.x > cw + halfW) v.x = -halfW;
-    if (dir === -1 && v.x < -halfW) v.x = cw + halfW;
-
-    // Wheel rotation (circumference ≈ 2π*r; r≈5 → ~31px per full turn)
-    v.wheelAngle += (v.speed / 31) * dir * Math.PI * 2;
-
-    // Bicycle natural sway
-    if (v.type === "bicycle") {
-      v.wobblePhase += 0.04 + v.speed * 0.015;
-      v.wobble = Math.sin(v.wobblePhase) * 1.8;
-    }
-
-    // Periodic random speed change
-    v.speedTimer--;
-    if (v.speedTimer <= 0) {
-      v.targetSpeed = randomSpeed(def);
-      v.speedTimer = 160 + Math.floor(Math.random() * 260);
-    }
-
-    // Smooth lane change animation
-    if (v.laneChanging) {
-      v.laneChangeProg = Math.min(1, v.laneChangeProg + 0.025);
-      if (v.laneChangeProg >= 1) v.laneChanging = false;
-    }
-  });
+  // ── Lamp fixtures ────────────────────────────────────────────────────────────
+  // Eastbound lamp: left of intersection, in right-lane area
+  drawOneLamp(ctx, VROAD_LEFT - 14, Math.round((CENTER_Y + ROAD_BOT) / 2), hs);
+  // Westbound lamp: right of intersection, in left-lane area
+  drawOneLamp(ctx, VROAD_RIGHT + 14, Math.round((ROAD_TOP + CENTER_Y) / 2), hs);
+  // Southbound lamp: above intersection, in southbound lane (left half of V road)
+  drawOneLamp(ctx, VLANE_SOUTH_X, ROAD_TOP - 18, vs);
+  // Northbound lamp: below intersection, in northbound lane (right half of V road)
+  drawOneLamp(ctx, VLANE_NORTH_X, ROAD_BOT + 18, vs);
 }
 
 function getVehicleY(v: Vehicle): number {
@@ -415,23 +324,24 @@ const TYPE_LABELS: { type: VehicleType; emoji: string; color: string }[] = [
   { type: "truck",      emoji: "🚚", color: "#e67e22" },
   { type: "car",        emoji: "🚗", color: "#3498db" },
   { type: "motorcycle", emoji: "🏍️", color: "#c0392b" },
-  { type: "bicycle",    emoji: "🚲", color: "#2ecc71" },
 ];
 
 export function VehicleSimulation() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const vehiclesRef = useRef<Vehicle[]>([]);
+  const vVehiclesRef = useRef<VVehicle[]>([]);
   const rafRef = useRef<number>(0);
   const pausedRef = useRef(false);
   const dashOffsetRef = useRef(0);
+  const trafficLightRef = useRef({ phase: 0, timer: PHASE_DURATIONS[0] });
 
   const [paused, setPaused] = useState(false);
   const [counts, setCounts] = useState<Record<VehicleType, number>>({
-    truck: 0, car: 0, motorcycle: 0, bicycle: 0,
+    truck: 0, car: 0, motorcycle: 0,
   });
 
   const syncCounts = useCallback(() => {
-    const c: Record<VehicleType, number> = { truck: 0, car: 0, motorcycle: 0, bicycle: 0 };
+    const c: Record<VehicleType, number> = { truck: 0, car: 0, motorcycle: 0 };
     vehiclesRef.current.forEach(v => c[v.type]++);
     setCounts({ ...c });
   }, []);
@@ -442,10 +352,10 @@ export function VehicleSimulation() {
     const cw = canvas.width;
     // Pick the lane for this vehicle type that has the fewest vehicles
     const preferredLanes = type === "motorcycle"
-      ? [0, 3, 1, 2]
-      : type === "truck" || type === "bicycle"
-        ? [1, 2, 0, 3]
-        : [0, 1, 2, 3];
+      ? [0, 3, 4, 1, 2]
+      : type === "truck"
+        ? [1, 2, 0, 3, 4]
+        : [0, 1, 2, 3, 4];
     const laneIdx = preferredLanes.find(i => {
       const inLane = vehiclesRef.current.filter(v => v.lane === i).length;
       return inLane < 5;
@@ -473,10 +383,9 @@ export function VehicleSimulation() {
     if (!canvas) return;
     const cw = canvas.width;
     const initialSpawns: [VehicleType, number][] = [
-      ["car", 0], ["car", 0], ["car", 1], ["car", 2], ["car", 2], ["car", 3],
-      ["truck", 1], ["truck", 3],
-      ["motorcycle", 0], ["motorcycle", 3],
-      ["bicycle", 1], ["bicycle", 2],
+      ["car", 0], ["car", 1], ["car", 2], ["car", 3],
+      ["truck", 1],
+      ["motorcycle", 4],
     ];
     // Spread vehicles across lanes at random positions
     initialSpawns.forEach(([type, lane]) => {
@@ -484,6 +393,19 @@ export function VehicleSimulation() {
       v.x = Math.random() * cw;
       vehiclesRef.current.push(v);
     });
+
+    // Seed vertical vehicles spread across the canvas height
+    const vInitialSpawns: [VehicleType, 0 | 1][] = [
+      ["car", 0], ["car", 1],
+      ["truck", 0],
+      ["motorcycle", 1],
+    ];
+    vInitialSpawns.forEach(([type, vLane]) => {
+      const v = spawnVVehicle(type, vLane);
+      v.y = Math.random() * CANVAS_H;
+      vVehiclesRef.current.push(v);
+    });
+
     syncCounts();
   }, [syncCounts]);
 
@@ -498,53 +420,84 @@ export function VehicleSimulation() {
       const cw = canvas.width;
 
       if (!pausedRef.current) {
-        tickVehicles(vehiclesRef.current, cw);
+        // Advance traffic light phase
+        const tl = trafficLightRef.current;
+        tl.timer--;
+        if (tl.timer <= 0) {
+          tl.phase = (tl.phase + 1) % 4;
+          tl.timer = PHASE_DURATIONS[tl.phase as 0 | 1 | 2 | 3];
+        }
+
+        tickVehicles(vehiclesRef.current, vVehiclesRef.current, cw, trafficLightRef.current.phase);
+        tickVVehicles(vVehiclesRef.current, vehiclesRef.current, trafficLightRef.current.phase);
         dashOffsetRef.current = (dashOffsetRef.current + 1.2) % 48;
       }
 
       // Draw
       ctx.clearRect(0, 0, cw, CANVAS_H);
       drawRoad(ctx, cw, dashOffsetRef.current);
+      drawTrafficLights(ctx, trafficLightRef.current.phase);
 
-      // Sort by y so vehicles overlap naturally
-      const sorted = [...vehiclesRef.current].sort((a, b) => getVehicleY(a) - getVehicleY(b));
+      // Build unified draw list sorted by y for correct overlap at intersection
+      const drawList: Array<{ sortY: number; draw: () => void }> = [];
 
-      sorted.forEach(v => {
+      vehiclesRef.current.forEach(v => {
         const def = DEFS[v.type];
         const dir = LANES[v.lane]!.dir;
         const vy = getVehicleY(v);
-
-        ctx.save();
-        ctx.translate(v.x, vy);
-        if (dir === -1) ctx.scale(-1, 1); // flip for left-going
-
-        // Drop shadow
-        ctx.shadowColor = "rgba(0,0,0,0.5)";
-        ctx.shadowBlur = 6;
-        ctx.shadowOffsetX = dir === 1 ? -2 : 2;
-        ctx.shadowOffsetY = 3;
-
-        switch (v.type) {
-          case "truck":      drawTruck(ctx, v.color); break;
-          case "car":        drawCar(ctx, v.color); break;
-          case "motorcycle": drawMotorcycle(ctx, v.color, v.wheelAngle); break;
-          case "bicycle":    drawBicycle(ctx, v.color, v.wheelAngle); break;
-        }
-
-        ctx.shadowColor = "transparent";
-        ctx.shadowBlur = 0;
-        ctx.shadowOffsetX = 0;
-        ctx.shadowOffsetY = 0;
-
-        // Speed label (small, debug-style)
-        ctx.scale(dir, 1); // undo flip for text
-        ctx.fillStyle = "rgba(255,255,255,0.7)";
-        ctx.font = "8px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText(`${(v.speed * 60).toFixed(0)}`, 0, -def.h / 2 - 5);
-
-        ctx.restore();
+        drawList.push({ sortY: vy, draw: () => {
+          ctx.save();
+          ctx.translate(v.x, vy);
+          if (dir === -1) ctx.scale(-1, 1);
+          ctx.shadowColor = "rgba(0,0,0,0.5)";
+          ctx.shadowBlur = 6;
+          ctx.shadowOffsetX = dir === 1 ? -2 : 2;
+          ctx.shadowOffsetY = 3;
+          switch (v.type) {
+            case "truck":      drawTruck(ctx, v.color); break;
+            case "car":        drawCar(ctx, v.color); break;
+            case "motorcycle": drawMotorcycle(ctx, v.color, v.wheelAngle); break;
+          }
+          ctx.shadowColor = "transparent"; ctx.shadowBlur = 0;
+          ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+          ctx.scale(dir, 1);
+          ctx.fillStyle = "rgba(255,255,255,0.7)";
+          ctx.font = "8px monospace"; ctx.textAlign = "center";
+          ctx.fillText(`${(v.speed * 60).toFixed(0)}`, 0, -def.h / 2 - 5);
+          ctx.restore();
+        }});
       });
+
+      vVehiclesRef.current.forEach(v => {
+        const def = DEFS[v.type];
+        const dir = vDir(v.vLane);
+        const lx = vLaneX(v.vLane) + v.wobble;
+        drawList.push({ sortY: v.y, draw: () => {
+          ctx.save();
+          ctx.translate(lx, v.y);
+          // Rotate so the existing right-facing draw functions point in the travel direction
+          ctx.rotate(dir === 1 ? Math.PI / 2 : -Math.PI / 2);
+          ctx.shadowColor = "rgba(0,0,0,0.5)";
+          ctx.shadowBlur = 6;
+          ctx.shadowOffsetX = -2; ctx.shadowOffsetY = 3;
+          switch (v.type) {
+            case "truck":      drawTruck(ctx, v.color); break;
+            case "car":        drawCar(ctx, v.color); break;
+            case "motorcycle": drawMotorcycle(ctx, v.color, v.wheelAngle); break;
+          }
+          ctx.shadowColor = "transparent"; ctx.shadowBlur = 0;
+          ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+          // Speed label — unrotate so text is readable
+          ctx.rotate(dir === 1 ? -Math.PI / 2 : Math.PI / 2);
+          ctx.fillStyle = "rgba(255,255,255,0.7)";
+          ctx.font = "8px monospace"; ctx.textAlign = "center";
+          ctx.fillText(`${(v.speed * 60).toFixed(0)}`, 0, -def.h / 2 - 5);
+          ctx.restore();
+        }});
+      });
+
+      drawList.sort((a, b) => a.sortY - b.sortY);
+      drawList.forEach(item => item.draw());
 
       // Pause overlay
       if (pausedRef.current) {
@@ -564,7 +517,7 @@ export function VehicleSimulation() {
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", padding: "1rem" }}>
       <h2 style={{ color: "#F9FAFB", margin: 0, fontSize: "1.25rem", fontWeight: 600 }}>
-        Vehicle Traffic Simulation
+        Crossroads Traffic Simulation
       </h2>
 
       {/* Canvas */}
@@ -577,7 +530,7 @@ export function VehicleSimulation() {
         />
         {/* Lane labels */}
         <div style={{ position: "absolute", left: 8, top: 0, height: "100%", display: "flex", flexDirection: "column", justifyContent: "space-around", pointerEvents: "none" }}>
-          {[{ label: "← Fast", y: LANES[0]!.y }, { label: "← Slow", y: LANES[1]!.y }, { label: "Slow →", y: LANES[2]!.y }, { label: "Fast →", y: LANES[3]!.y }]
+          {[{ label: "← Fast", y: LANES[0]!.y }, { label: "← Slow", y: LANES[1]!.y }, { label: "Slow →", y: LANES[2]!.y }, { label: "Fast →", y: LANES[3]!.y }, { label: "Express →", y: LANES[4]!.y }]
             .map(({ label, y }) => (
               <span key={label} style={{ position: "absolute", top: y - 7, left: 8, fontSize: "10px", color: "rgba(255,255,255,0.5)", fontFamily: "monospace" }}>
                 {label}
