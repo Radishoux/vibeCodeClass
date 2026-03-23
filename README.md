@@ -30,9 +30,34 @@ The simulation runs entirely client-side on an HTML5 Canvas (900 × 440 px).
 - `src/index.ts` — Bun HTTP server; serves `src/index.html` for all routes
 - `src/frontend.tsx` — React entry point, mounts `<App>` with HMR support
 - `src/App.tsx` — root layout component
-- `src/VehicleSimulation.tsx` — the full simulation: road drawing, vehicle physics, traffic light logic, and React controls
+- `src/simulation.ts` — pure simulation logic (no React, no Canvas): lane layout, vehicle specs, spawn helpers, traffic-light signals, and the `tickVehicles` / `tickVVehicles` physics functions; fully unit-testable in isolation
+- `src/VehicleSimulation.tsx` — React component that owns the Canvas and the animation loop; imports everything from `simulation.ts` and handles all drawing
 
 All animation state is kept in `useRef` to avoid per-frame re-renders. The `requestAnimationFrame` loop ticks physics then draws — road first, traffic lights (stop lines + lamps), then all vehicles depth-sorted by Y for correct overlap at the intersection.
+
+## Testing
+
+Tests live in `src/simulation.test.ts` and cover:
+
+- Traffic-light signal logic (`hSignal`, `vSignal`, phase durations)
+- Spawn helpers (`spawnVehicle`, `spawnVVehicle`, `randomSpeed`, `vDir`, `vLaneX`)
+- Gap-following physics (speed reduction, hard stop, positional correction)
+- Traffic-light braking (deceleration on red, no slowdown on green)
+- Intersection clearing (hold on green while box is occupied)
+- Vehicle wrapping (edge-to-edge teleport)
+
+```bash
+bun test
+```
+
+## CI/CD
+
+Two GitHub Actions workflows run on every push:
+
+| Workflow | Trigger | Steps |
+|---|---|---|
+| `ci.yml` | All branches & PRs | Install → test → build |
+| `deploy.yml` | Push to `main` | Install → **test** → build → deploy to GitHub Pages |
 
 ## Tech stack
 

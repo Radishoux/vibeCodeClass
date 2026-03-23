@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach } from "bun:test";
 import {
   hSignal, vSignal, PHASE_DURATIONS,
   DEFS, LANES, VROAD_LEFT, VROAD_RIGHT, ROAD_TOP, ROAD_BOT, CANVAS_H,
+  VLANE_SOUTH_X, VLANE_NORTH_X,
   tickVehicles, tickVVehicles,
+  randomSpeed, spawnVehicle, spawnVVehicle, vDir, vLaneX,
   type Vehicle, type VVehicle,
   resetIdCounter,
 } from "./simulation";
@@ -196,6 +198,85 @@ describe("intersection clearing", () => {
     const hVehicle = makeVehicle({ id: 2, lane: 2, x: -200, speed: 0, targetSpeed: 0 });
     tickVVehicles([vVehicle], [hVehicle], 2); // phase 2 = V green, box clear
     expect(vVehicle.speed).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ─── Spawn helpers ────────────────────────────────────────────────────────────
+
+describe("vDir", () => {
+  it("vLane 0 (southbound) returns +1", () => expect(vDir(0)).toBe(1));
+  it("vLane 1 (northbound) returns -1", () => expect(vDir(1)).toBe(-1));
+});
+
+describe("vLaneX", () => {
+  it("vLane 0 returns VLANE_SOUTH_X", () => expect(vLaneX(0)).toBe(VLANE_SOUTH_X));
+  it("vLane 1 returns VLANE_NORTH_X", () => expect(vLaneX(1)).toBe(VLANE_NORTH_X));
+});
+
+describe("randomSpeed", () => {
+  it("stays within [minSpeed, maxSpeed] for a car", () => {
+    const def = DEFS.car;
+    for (let i = 0; i < 50; i++) {
+      const s = randomSpeed(def);
+      expect(s).toBeGreaterThanOrEqual(def.minSpeed);
+      expect(s).toBeLessThanOrEqual(def.maxSpeed);
+    }
+  });
+
+  it("stays within [minSpeed, maxSpeed] for a truck", () => {
+    const def = DEFS.truck;
+    for (let i = 0; i < 50; i++) {
+      const s = randomSpeed(def);
+      expect(s).toBeGreaterThanOrEqual(def.minSpeed);
+      expect(s).toBeLessThanOrEqual(def.maxSpeed);
+    }
+  });
+});
+
+describe("spawnVehicle", () => {
+  it("spawns in the requested lane", () => {
+    const v = spawnVehicle("car", 2, 900);
+    expect(v.lane).toBe(2);
+  });
+
+  it("eastbound vehicle starts off the left edge", () => {
+    // lane 2: dir = +1
+    const v = spawnVehicle("car", 2, 900);
+    expect(v.x).toBeLessThan(0);
+  });
+
+  it("westbound vehicle starts off the right edge", () => {
+    // lane 0: dir = -1
+    const v = spawnVehicle("car", 0, 900);
+    expect(v.x).toBeGreaterThan(900);
+  });
+
+  it("speed equals targetSpeed on spawn", () => {
+    const v = spawnVehicle("car", 2, 900);
+    expect(v.speed).toBe(v.targetSpeed);
+  });
+
+  it("is not lane-changing on spawn", () => {
+    const v = spawnVehicle("truck", 1, 900);
+    expect(v.laneChanging).toBe(false);
+    expect(v.laneChangeProg).toBe(1);
+  });
+});
+
+describe("spawnVVehicle", () => {
+  it("southbound vehicle (vLane 0) starts above the canvas", () => {
+    const v = spawnVVehicle("car", 0);
+    expect(v.y).toBeLessThan(0);
+  });
+
+  it("northbound vehicle (vLane 1) starts below the canvas", () => {
+    const v = spawnVVehicle("car", 1);
+    expect(v.y).toBeGreaterThan(CANVAS_H);
+  });
+
+  it("speed equals targetSpeed on spawn", () => {
+    const v = spawnVVehicle("motorcycle", 0);
+    expect(v.speed).toBe(v.targetSpeed);
   });
 });
 
